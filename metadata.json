@@ -1,0 +1,6 @@
+{
+  "name": "KlusGarant - Eerlijk werk, veilig geregeld",
+  "description": "Tweezijdig dienstenplatform voor particulieren, zelfstandigen en klussers met veilig blind-bidding offertesysteem, 72-uurs escrow garantie en Stripe integratie.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
