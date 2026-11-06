@@ -1,4 +1,4 @@
-name: Android build
+name: Android APK and AAB build
 
 on:
   push:
@@ -10,9 +10,15 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: android-build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-android:
+    name: Build Android APK and AAB
     runs-on: ubuntu-latest
+    timeout-minutes: 35
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -20,7 +26,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: "22"
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -37,24 +43,75 @@ jobs:
       - name: Build web application
         run: npm run build
 
-      - name: Generate Android project
-        run: npx cap add android
+      - name: Generate Android project when missing
+        shell: bash
+        run: |
+          if [ ! -d android ]; then
+            npx cap add android
+          else
+            echo "Android project already exists; keeping it and syncing."
+          fi
 
-      - name: Sync web assets to Android
+      - name: Sync Capacitor Android project
         run: npx cap sync android
 
       - name: Build debug APK and unsigned release AAB
+        shell: bash
         run: |
-          chmod +x android/gradlew
           cd android
-          ./gradlew assembleDebug bundleRelease
+          chmod +x gradlew
+          if ! ./gradlew --no-daemon --stacktrace assembleDebug bundleRelease; then
+            echo "First Gradle attempt failed; retrying once with refreshed dependencies."
+            ./gradlew --no-daemon --refresh-dependencies --stacktrace assembleDebug bundleRelease
+          fi
 
-      - name: Upload Android build artifacts
+      - name: Verify APK and AAB outputs
+        shell: bash
+        run: |
+          test -f android/app/build/outputs/apk/debug/app-debug.apk
+          test -f android/app/build/outputs/bundle/release/app-release.aab
+          ls -lh android/app/build/outputs/apk/debug/app-debug.apk
+          ls -lh android/app/build/outputs/bundle/release/app-release.aab
+
+      - name: Upload APK and AAB
         uses: actions/upload-artifact@v4
         with:
-          name: klusgarant-android-unsigned
+          name: klusgarant-android-build
           path: |
-            android/app/build/outputs/apk/debug/*.apk
-            android/app/build/outputs/bundle/release/*.aab
+            android/app/build/outputs/apk/debug/app-debug.apk
+            android/app/build/outputs/bundle/release/app-release.aab
           if-no-files-found: error
+          retention-days: 14
+
+      - name: Repair bot - collect diagnostics after build failure
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "KlusGarant Android build diagnostics"
+            echo "Commit: $GITHUB_SHA"
+            echo "Runner: $RUNNER_OS"
+            echo "Node: $(node --version 2>&1 || true)"
+            echo "npm: $(npm --version 2>&1 || true)"
+            echo "Java:"
+            java -version 2>&1 || true
+            echo "Project files:"
+            ls -la
+            echo "Android directory:"
+            ls -la android 2>&1 || true
+            echo "Gradle wrapper:"
+            ls -la android/gradlew* 2>&1 || true
+            echo "Build outputs:"
+            find android/app/build/outputs -maxdepth 5 -type f -print 2>&1 || true
+            echo "Recent npm logs:"
+            find ~/.npm/_logs -maxdepth 1 -type f -name '*debug-0.log' -print 2>/dev/null | tail -3
+          } | tee android-build-diagnostics.txt
+
+      - name: Upload repair diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: klusgarant-android-build-diagnostics
+          path: android-build-diagnostics.txt
+          if-no-files-found: warn
           retention-days: 14
